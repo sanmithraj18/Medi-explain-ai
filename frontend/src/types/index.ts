@@ -84,6 +84,7 @@ export interface OverallSummary {
   overall_assessment: string;
   parameters_within_range: string[];
   parameters_outside_range: string[];
+  parameters_unclassified?: string[];
   potentially_critical_flags: string[];
   missing_information: string[];
   key_limitations: string[];
@@ -94,15 +95,28 @@ export interface OverallSummary {
 export interface ParameterExplanation {
   parameter_name: string;
   observed_value: string;
-  unit: string;
-  reference_range: string;
-  classification: 'WITHIN_RANGE' | 'BELOW_RANGE' | 'ABOVE_RANGE' | 'SIGNIFICANTLY_BELOW' | 'SIGNIFICANTLY_ABOVE' | 'UNKNOWN';
+  unit?: string | null;
+  reference_range?: string | null;
+  classification:
+    | 'WITHIN_RANGE'
+    | 'BELOW_RANGE'
+    | 'ABOVE_RANGE'
+    | 'CRITICAL'
+    | 'SIGNIFICANTLY_BELOW'
+    | 'SIGNIFICANTLY_ABOVE'
+    | 'RANGE_UNAVAILABLE'
+    | 'NOT_CLASSIFIED'
+    | 'UNKNOWN'
+    | 'UNCONFIRMED_OCR_VALUE';
   what_it_measures: string;
   simple_explanation: string;
   contextual_limitations: string;
   when_to_seek_attention: string;
   doctor_questions: string[];
   disclaimer: string;
+  is_contextual_threshold?: boolean;
+  clinical_source?: string | null;
+  contextual_notes?: string | null;
 }
 
 export interface DoctorQuestion {

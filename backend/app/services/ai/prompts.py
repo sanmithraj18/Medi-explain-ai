@@ -37,11 +37,12 @@ Do not add, modify or invent any values, units or reference ranges."""
 OVERALL_SUMMARY_PROMPT = """Analyze the following laboratory test parameters extracted from a medical report and return a JSON object with this exact structure:
 
 {{
-  "report_type": "string — type of report (e.g., Complete Blood Count, Lipid Profile)",
-  "overall_assessment": "string — 2-3 sentence plain-language overview of what the report shows",
-  "parameters_within_range": ["list of parameter names that are within reference range"],
-  "parameters_outside_range": ["list of parameter names outside reference range"],
-  "potentially_critical_flags": ["list of parameters that may warrant prompt medical attention, if any"],
+  "report_type": "string — type of report (e.g., Complete Blood Count, Lipid Profile, Echocardiogram Report)",
+  "overall_assessment": "string — 2-3 sentence plain-language educational overview of what the report shows",
+  "parameters_within_range": ["list of parameter names that are strictly within normal reference range"],
+  "parameters_outside_range": ["list of parameter names outside reference range or outside recognized clinical benchmarks"],
+  "parameters_unclassified": ["list of parameter names where laboratory reference range was unavailable or not reported"],
+  "potentially_critical_flags": ["list of parameters that warrant prompt medical review, if any"],
   "missing_information": ["list of important information that is absent from the report"],
   "key_limitations": ["list of important limitations — e.g., single snapshot, lab variation, no clinical context"],
   "disclaimer": "This explanation is for informational purposes only and does not constitute medical advice. Please discuss these results with your healthcare provider.",
@@ -53,6 +54,14 @@ OVERALL_SUMMARY_PROMPT = """Analyze the following laboratory test parameters ext
     "string — question 5"
   ]
 }}
+
+CLASSIFICATION & SAFETY RULES:
+1. "parameters_within_range": ONLY include parameters that have a documented reference interval and fall strictly within it. NEVER place parameters with missing reference ranges here.
+2. "parameters_outside_range": Include parameters that fall below or above reference range, OR outside recognized clinical benchmarks (e.g. Left Ventricular Ejection Fraction of 40% is below the typical >=50% ACC/AHA benchmark and MUST be counted in parameters_outside_range).
+3. "parameters_unclassified": Include parameters where no laboratory reference range was reported and no recognized contextual clinical benchmark applies.
+4. "potentially_critical_flags": Include all parameters with critical flags or urgent abnormal values warranting prompt clinical evaluation.
+5. NEVER diagnose heart failure or any cardiac disease based on ejection fraction alone.
+6. NEVER diagnose hypertension or stage blood pressure based on systolic blood pressure alone.
 
 Extracted parameters:
 {parameters_json}
@@ -73,11 +82,11 @@ Return this exact JSON structure:
   "observed_value": "{observed_value}",
   "unit": "{unit}",
   "reference_range": "{reference_text}",
-  "classification": "one of: WITHIN_RANGE, BELOW_RANGE, ABOVE_RANGE, SIGNIFICANTLY_BELOW, SIGNIFICANTLY_ABOVE, UNKNOWN",
+  "classification": "one of: WITHIN_RANGE, BELOW_RANGE, ABOVE_RANGE, CRITICAL, RANGE_UNAVAILABLE, NOT_CLASSIFIED, UNKNOWN",
   "what_it_measures": "string — plain-language explanation of what this test measures (1-2 sentences)",
   "simple_explanation": "string — what this specific result means in plain language, without diagnosing",
   "contextual_limitations": "string — important limitations (e.g., single test, lab variation, lifestyle factors)",
-  "when_to_seek_attention": "string — guidance on when to contact a doctor, if applicable. Use 'Discuss at your next routine appointment' for mildly abnormal. Use 'Contact your doctor promptly' or 'Seek immediate medical attention' only for potentially critical values.",
+  "when_to_seek_attention": "string — guidance on when to contact a doctor. Use 'Discuss at your next routine appointment' for mildly abnormal. Use 'Contact your doctor promptly' or 'Seek immediate medical attention' for potentially critical values.",
   "doctor_questions": [
     "string — specific question about this parameter",
     "string — question about what might affect this result",
@@ -86,7 +95,19 @@ Return this exact JSON structure:
   "disclaimer": "This explanation is for informational purposes only. Please discuss this result with your healthcare provider."
 }}
 
-CRITICAL RULE: Do not diagnose any condition. An out-of-range value does not confirm disease.
+CRITICAL CLINICAL BENCHMARKS & SAFETY MANDATES:
+1. Left Ventricular Ejection Fraction (LVEF):
+   - Clinical Benchmark: Normal LVEF is typically >= 50% (ACC/AHA Guidelines for the Management of Heart Failure).
+   - An ejection fraction below 50% (such as 40%) is BELOW_RANGE and reflects reduced left ventricular systolic function.
+   - MANDATORY SAFETY RULE: NEVER diagnose heart failure based on ejection fraction alone. Heart failure is a clinical syndrome requiring symptoms, physical signs, and physician diagnosis.
+2. Systolic Blood Pressure:
+   - Clinical Benchmark: Normal systolic blood pressure is < 120 mmHg (2017 ACC/AHA High Blood Pressure Clinical Practice Guideline).
+   - A systolic reading >= 120 mmHg is ABOVE_RANGE.
+   - MANDATORY SAFETY RULE: NEVER classify systolic blood pressure independently as a complete blood-pressure assessment or stage. Note that complete staging requires concurrent diastolic blood pressure and repeated clinical measurements.
+3. Missing Laboratory Reference Ranges:
+   - If the laboratory did not report a reference range and no recognized clinical benchmark applies, classification MUST be RANGE_UNAVAILABLE. NEVER return WITHIN_RANGE when the reference range is missing.
+4. ABSOLUTE PROHIBITION: Do NOT diagnose any condition or prescribe any medication. An out-of-range value does not confirm disease.
+
 Return only the JSON object."""
 
 

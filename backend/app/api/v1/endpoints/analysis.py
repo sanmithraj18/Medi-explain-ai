@@ -136,14 +136,22 @@ async def trigger_analysis(
                 "disclaimer": "This value has not yet been confirmed by the patient.",
             }
 
-        # 7. Extract questions
+        # 7. Deterministically reconcile classifications across overview and parameter cards
+        from app.services.ai.classifier import reconcile_analysis_classifications
+        overall_summary, detailed_explanation = reconcile_analysis_classifications(
+            overall_summary,
+            detailed_explanation,
+            confirmed_params,
+        )
+
+        # 8. Extract questions
         questions = overall_summary.get("doctor_discussion_questions", [])
 
-        # 8. Clear previous analysis and questions if re-running
+        # 9. Clear previous analysis and questions if re-running
         supabase.table("report_analyses").delete().eq("report_id", report_id).execute()
         supabase.table("doctor_questions").delete().eq("report_id", report_id).execute()
 
-        # 9. Store analysis in database
+        # 10. Store analysis in database
         analysis_record = {
             "report_id": report_id,
             "overall_summary": overall_summary,
@@ -154,7 +162,7 @@ async def trigger_analysis(
         }
         analysis_result = supabase.table("report_analyses").insert(analysis_record).execute()
 
-        # 10. Store doctor questions
+        # 11. Store doctor questions
         if questions:
             question_records = [
                 {

@@ -34,6 +34,14 @@ UNSAFE_DIAGNOSTIC_PATTERNS = [
         re.I,
     ),
     re.compile(
+        r"\b(you have|diagnosed with|diagnosis of|diagnosis is|diagnose|you suffer from|this indicates you have|this confirms(?: you have)?)\s+(?:congestive\s+)?(?:heart failure|systolic heart failure|diastolic heart failure|chf)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(confirms|diagnostic of|diagnoses)\s+(?:congestive\s+)?(?:heart failure|chf)\b",
+        re.I,
+    ),
+    re.compile(
         r"\b(take|prescribe|prescribed|dosage of|start taking|stop taking|increase dose|decrease dose)\s+[0-9]*\s*(mg|tablets|capsules|pills|medication|insulin|metformin|aspirin)?\b",
         re.I,
     ),
@@ -48,16 +56,24 @@ def sanitize_and_verify_medical_safety(text: str) -> str:
     """
     Defense-in-depth safety guardrail:
     Scans AI text for diagnostic or prescriptive statements and neutralizes them.
+    Guarantees heart failure is not diagnosed based on ejection fraction alone.
     """
     if not text:
         return ""
     sanitized = text
     for pattern in UNSAFE_DIAGNOSTIC_PATTERNS:
         if pattern.search(sanitized):
-            sanitized = pattern.sub(
-                "an abnormal laboratory finding warrants clinical evaluation by a physician",
-                sanitized,
-            )
+            # If statement pertains to heart failure, substitute specific educational guidance
+            if re.search(r"\b(?:heart failure|chf)\b", sanitized, re.I):
+                sanitized = pattern.sub(
+                    "reduced systolic function warrants clinical evaluation by a physician, but does not alone diagnose heart failure",
+                    sanitized,
+                )
+            else:
+                sanitized = pattern.sub(
+                    "an abnormal laboratory finding warrants clinical evaluation by a physician",
+                    sanitized,
+                )
     return sanitized
 
 
@@ -310,6 +326,24 @@ async def generate_parameter_explanation(parameter: Dict[str, Any]) -> Dict[str,
         result_dict["what_it_measures"] = sanitize_and_verify_medical_safety(
             result_dict.get("what_it_measures", "")
         )
+        if result_dict.get("contextual_limitations"):
+            result_dict["contextual_limitations"] = sanitize_and_verify_medical_safety(
+                result_dict.get("contextual_limitations", "")
+            )
+
+        # Apply authoritative classification rules
+        from app.services.ai.classifier import classify_parameter
+        auth_info = classify_parameter(parameter, llm_classification=result_dict.get("classification"))
+        result_dict["classification"] = auth_info["classification"]
+        result_dict["is_contextual_threshold"] = auth_info["is_contextual_threshold"]
+        result_dict["clinical_source"] = auth_info["clinical_source"]
+        result_dict["contextual_notes"] = auth_info["contextual_notes"]
+        if auth_info["contextual_notes"]:
+            existing_limitations = result_dict.get("contextual_limitations", "")
+            if auth_info["contextual_notes"] not in existing_limitations:
+                result_dict["contextual_limitations"] = (
+                    f"{auth_info['contextual_notes']} {existing_limitations}".strip()
+                )
 
         return result_dict
 

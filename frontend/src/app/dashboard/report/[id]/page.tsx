@@ -6,7 +6,7 @@ import { useParams } from 'next/navigation';
 import { 
   Activity, ArrowLeft, Brain, Sparkles, CheckCircle2, 
   AlertTriangle, Copy, Check, MessageSquare,
-  Printer, ShieldAlert, RefreshCw, FileText, X, CheckCheck, Edit2
+  Printer, ShieldAlert, RefreshCw, FileText, X, CheckCheck, Edit2, HelpCircle
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { formatDate } from '@/lib/utils';
@@ -384,7 +384,7 @@ export default function ReportDetailPage({ params }: PageProps) {
               {overall.overall_assessment}
             </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
               <div className="p-4 rounded-xl bg-green-50/60 border border-green-200 space-y-2">
                 <div className="flex items-center gap-2 text-green-800 font-bold text-xs">
                   <CheckCircle2 size={16} /> Within Reference Range ({overall.parameters_within_range?.length || 0})
@@ -395,6 +395,9 @@ export default function ReportDetailPage({ params }: PageProps) {
                       {p}
                     </span>
                   ))}
+                  {(!overall.parameters_within_range || overall.parameters_within_range.length === 0) && (
+                    <span className="text-xs text-slate-400 italic">None</span>
+                  )}
                 </div>
               </div>
 
@@ -408,6 +411,25 @@ export default function ReportDetailPage({ params }: PageProps) {
                       {p}
                     </span>
                   ))}
+                  {(!overall.parameters_outside_range || overall.parameters_outside_range.length === 0) && (
+                    <span className="text-xs text-slate-400 italic">None detected</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200 space-y-2">
+                <div className="flex items-center gap-2 text-slate-700 font-bold text-xs">
+                  <HelpCircle size={16} className="text-slate-500" /> Reference Range Unavailable ({overall.parameters_unclassified?.length || 0})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {overall.parameters_unclassified?.map((p: string) => (
+                    <span key={p} className="text-xs px-2 py-0.5 bg-white text-slate-700 rounded font-medium border border-slate-200">
+                      {p}
+                    </span>
+                  ))}
+                  {(!overall.parameters_unclassified || overall.parameters_unclassified.length === 0) && (
+                    <span className="text-xs text-slate-400 italic">None</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -470,9 +492,37 @@ export default function ReportDetailPage({ params }: PageProps) {
           <div className="space-y-4">
             {parameters.map((param) => {
               const exp = detailed[param.parameter_name];
-              const isHigh = param.laboratory_flag === 'H' || exp?.classification === 'ABOVE_RANGE';
-              const isLow = param.laboratory_flag === 'L' || exp?.classification === 'BELOW_RANGE';
-              const isCritical = param.laboratory_flag === 'CRITICAL';
+
+              // Determine classification with authoritative consistency
+              const hasLabRange = Boolean(param.reference_text || param.reference_min !== null || param.reference_max !== null);
+              let classification = exp?.classification;
+
+              if (classification === 'SIGNIFICANTLY_ABOVE') {
+                classification = 'ABOVE_RANGE';
+              } else if (classification === 'SIGNIFICANTLY_BELOW') {
+                classification = 'BELOW_RANGE';
+              }
+
+              if (!classification) {
+                if (param.laboratory_flag === 'CRITICAL' || overall?.potentially_critical_flags?.includes(param.parameter_name)) {
+                  classification = 'CRITICAL';
+                } else if (param.laboratory_flag === 'H' || param.laboratory_flag === 'HIGH') {
+                  classification = 'ABOVE_RANGE';
+                } else if (param.laboratory_flag === 'L' || param.laboratory_flag === 'LOW') {
+                  classification = 'BELOW_RANGE';
+                } else if (hasLabRange) {
+                  classification = 'WITHIN_RANGE';
+                } else {
+                  classification = 'RANGE_UNAVAILABLE';
+                }
+              }
+
+              const isCritical = classification === 'CRITICAL' || param.laboratory_flag === 'CRITICAL' || overall?.potentially_critical_flags?.includes(param.parameter_name);
+              const isHigh = classification === 'ABOVE_RANGE';
+              const isLow = classification === 'BELOW_RANGE';
+              const isWithin = classification === 'WITHIN_RANGE';
+              const isUnclassified = classification === 'RANGE_UNAVAILABLE' || classification === 'NOT_CLASSIFIED' || classification === 'UNKNOWN';
+
               const confPercent = Math.round((param.extraction_confidence || 0.8) * 100);
               const isEditing = editingParamId === param.id;
 
@@ -523,6 +573,12 @@ export default function ReportDetailPage({ params }: PageProps) {
                             <CheckCheck size={11} /> Verified by Patient
                           </span>
                         )}
+
+                        {exp?.is_contextual_threshold && exp?.clinical_source && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal/10 text-teal-dark border border-teal/20 inline-flex items-center gap-1">
+                            <ShieldAlert size={11} /> Benchmark: {exp.clinical_source}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-3 mt-1.5 flex-wrap">
@@ -567,7 +623,12 @@ export default function ReportDetailPage({ params }: PageProps) {
                               </span>
                             )}
                             <span className="text-xs text-slate-400">
-                              Reference: {param.reference_text || 'Standard Range Not Reported by Lab'}
+                              Reference:{' '}
+                              {param.reference_text
+                                ? param.reference_text
+                                : exp?.is_contextual_threshold && exp?.clinical_source
+                                ? `Clinical Benchmark (${exp.clinical_source})`
+                                : 'Not Reported by Laboratory'}
                             </span>
                           </>
                         )}
@@ -591,12 +652,14 @@ export default function ReportDetailPage({ params }: PageProps) {
                       <span
                         className={`text-xs font-bold px-3 py-1 rounded-full ${
                           isCritical
-                            ? 'bg-red-100 text-red-700'
+                            ? 'bg-red-100 text-red-700 border border-red-200'
                             : isHigh
-                            ? 'bg-amber-100 text-amber-800'
+                            ? 'bg-amber-100 text-amber-800 border border-amber-200'
                             : isLow
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-green-100 text-green-700'
+                            ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                            : isWithin
+                            ? 'bg-green-100 text-green-700 border border-green-200'
+                            : 'bg-slate-100 text-slate-700 border border-slate-200'
                         }`}
                       >
                         {isCritical
@@ -605,10 +668,23 @@ export default function ReportDetailPage({ params }: PageProps) {
                           ? 'Above Range'
                           : isLow
                           ? 'Below Range'
-                          : 'Within Range'}
+                          : isWithin
+                          ? 'Within Range'
+                          : 'Reference Range Unavailable'}
                       </span>
                     </div>
                   </div>
+
+                  {/* Contextual limitation or guideline note banner */}
+                  {exp?.contextual_notes && (
+                    <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed flex items-start gap-2">
+                      <ShieldAlert size={14} className="text-amber-700 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="text-amber-950">Clinical Context: </strong>
+                        {exp.contextual_notes}
+                      </div>
+                    </div>
+                  )}
 
                   {exp ? (
                     <div className="pt-3 border-t border-slate-100 space-y-3 text-xs leading-relaxed">
