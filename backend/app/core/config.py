@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # AI (Google Gemini)
     AI_API_KEY: str = ""
-    AI_MODEL: str = "gemini-3.5-flash"
+    AI_MODEL: str = "gemini-3.8-flash"
 
     # Razorpay (Payment Gateway - Test mode initially)
     RAZORPAY_KEY_ID: str = ""

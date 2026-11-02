@@ -6,7 +6,7 @@ MediExplain AI is a production-oriented medical report explanation SaaS built wi
 - **Frontend:** Next.js 14 App Router, TypeScript, Tailwind CSS, shadcn/ui, Sonner
 - **Backend:** FastAPI, Pydantic, SlowAPI rate-limiting, PyMuPDF, Tesseract OCR
 - **Database & Storage:** Supabase PostgreSQL with Row Level Security (RLS) & private encrypted storage
-- **AI Processing:** Google Gemini 1.5 Flash with structured JSON output and clinical safety guardrails
+- **AI Processing:** Google Gemini 3.8 Flash (with resilient automatic fallback to Gemini 3.5 Flash) with structured JSON output and clinical safety guardrails
 - **Billing & Subscriptions:** Razorpay Subscriptions API with 30-day trial and ₹200/month recurring mandate
 
 ---
@@ -55,7 +55,7 @@ MediExplain AI is a production-oriented medical report explanation SaaS built wi
 2. Add to backend `.env`:
    ```bash
    AI_API_KEY=your_gemini_api_key
-   AI_MODEL=gemini-1.5-flash
+   AI_MODEL=gemini-3.8-flash
    ```
 
 ---

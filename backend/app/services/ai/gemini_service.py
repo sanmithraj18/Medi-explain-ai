@@ -67,7 +67,7 @@ DEPRECATED_MODELS = {
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 }
-RECOMMENDED_MODEL = "gemini-3.5-flash"
+RECOMMENDED_MODEL = "gemini-3.8-flash"
 
 
 def _create_model(model_name: str):
@@ -103,6 +103,41 @@ def _get_model(model_name: str = None):
         _model = _create_model(target)
         _active_model_name = target
     return _model
+
+
+def _generate_content_with_resilience(prompt: str):
+    """
+    Generate content with primary configured model and automatic fallback on 503/504/404/429 errors.
+    Guarded by request timeout to prevent hanging requests during upstream load spikes.
+    """
+    primary = settings.AI_MODEL or RECOMMENDED_MODEL
+    chain = [primary]
+    for alt in (
+        RECOMMENDED_MODEL,
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
+    ):
+        if alt not in chain:
+            chain.append(alt)
+
+    last_exc = None
+    for m_name in chain:
+        try:
+            model = _get_model(m_name)
+            return model.generate_content(prompt, request_options={"timeout": 15})
+        except HTTPException:
+            raise
+        except Exception as e:
+            last_exc = e
+            err_str = str(e)
+            # If model encounters temporary high demand (503), timeout (504), 404, or model quota limits (429), try next candidate
+            if any(k in err_str.lower() for k in ["404", "not found", "503", "unavailable", "high demand", "deadline", "timeout", "quota", "resource_exhausted", "429"]):
+                continue
+            _handle_gemini_exception(e, m_name)
+    _handle_gemini_exception(last_exc, primary)
 
 
 def _handle_gemini_exception(e: Exception, model_name: str = None):
@@ -198,7 +233,8 @@ async def generate_overall_summary(parameters: List[Dict[str, Any]]) -> Dict[str
     Generate an educational overall summary of all confirmed extracted parameters.
     Validates output through OverallSummarySchema before returning.
     """
-    model = _get_model()
+    # Pre-check API configuration
+    _get_model()
 
     # Pass strictly extracted facts — NEVER send patient PII
     param_summary = []
@@ -216,7 +252,7 @@ async def generate_overall_summary(parameters: List[Dict[str, Any]]) -> Dict[str
     )
 
     try:
-        response = model.generate_content(prompt)
+        response = _generate_content_with_resilience(prompt)
         raw_result = _extract_json(response.text)
 
         # Validate with Pydantic schema
@@ -245,7 +281,8 @@ async def generate_parameter_explanation(parameter: Dict[str, Any]) -> Dict[str,
     Generate plain-language explanation for a single lab parameter.
     Validates output through ParameterExplanationSchema before returning.
     """
-    model = _get_model()
+    # Pre-check API configuration
+    _get_model()
 
     prompt = PARAMETER_EXPLANATION_PROMPT.format(
         parameter_name=parameter.get("parameter_name", "Unknown"),
@@ -256,7 +293,7 @@ async def generate_parameter_explanation(parameter: Dict[str, Any]) -> Dict[str,
     )
 
     try:
-        response = model.generate_content(prompt)
+        response = _generate_content_with_resilience(prompt)
         raw_result = _extract_json(response.text)
 
         # Validate with Pydantic schema
