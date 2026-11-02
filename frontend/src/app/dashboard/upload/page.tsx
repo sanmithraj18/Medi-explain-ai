@@ -238,6 +238,11 @@ export default function UploadReportPage() {
       }
 
       const data = await res.json();
+
+      if (!data?.report_id) {
+        throw new Error('Upload succeeded but no report ID was returned. Please check your report history.');
+      }
+
       setProgress(100);
       setStatusStep('Extraction complete! Redirecting to report overview...');
 

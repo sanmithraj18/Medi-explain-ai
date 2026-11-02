@@ -193,6 +193,24 @@ export default function ReportDetailPage({ params }: PageProps) {
     );
   }
 
+  if (!report) {
+    return (
+      <div className="py-24 text-center text-sm text-blue-grey flex flex-col items-center justify-center gap-3">
+        <AlertTriangle size={24} className="text-amber-500" />
+        <p className="font-semibold text-navy">Report not found</p>
+        <p className="text-xs text-slate-400 max-w-xs">
+          This report may still be processing or does not exist. Please check your report history.
+        </p>
+        <Link
+          href="/dashboard/reports"
+          className="inline-flex items-center gap-2 text-xs font-semibold text-teal hover:text-teal-dark mt-2"
+        >
+          <ArrowLeft size={14} /> Back to Reports
+        </Link>
+      </div>
+    );
+  }
+
   const overall = analysis?.overall_summary;
   const detailed = analysis?.detailed_explanation || {};
 
