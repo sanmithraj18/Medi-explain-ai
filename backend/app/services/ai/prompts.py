@@ -89,3 +89,43 @@ Return this exact JSON structure:
 CRITICAL RULE: Do not diagnose any condition. An out-of-range value does not confirm disease.
 Return only the JSON object."""
 
+
+VISION_EXTRACTION_PROMPT = """You are a precision medical document reader specializing in laboratory diagnostic reports.
+Your task is to transcribe and extract ONLY the laboratory test results explicitly visible in this document image.
+
+CRITICAL MEDICAL INTEGRITY CONSTRAINTS:
+1. STRICT FIDELITY: Extract ONLY tests and values that are explicitly printed or written in the image.
+2. ABSOLUTELY ZERO FABRICATION:
+   - NEVER invent or guess test names, numbers, units, or reference intervals.
+   - NEVER assume standard or normal reference ranges if the laboratory has not printed them in this document. If missing, set "reference_range" to null.
+   - If unit is not printed, set "unit" to null.
+3. PRESERVE NUMERICAL ACCURACY:
+   - Extract numbers exactly as printed (including decimal points).
+   - If a digit, decimal point, or value is blurred, questionable, or partially obscured, transcribe as best seen, set "extraction_confidence" below 0.70, and set "needs_user_review" to true.
+4. NON-LABORATORY DOCUMENTS:
+   - If this document is NOT a clinical laboratory or medical report (for example, a receipt, scenery, personal photo, or prescription without lab results), return an empty "parameters" list: [].
+5. NO DIAGNOSES:
+   - Do NOT provide clinical interpretations, medical diagnoses, or treatment recommendations. Only extract the factual laboratory records.
+
+Return a valid JSON object matching this exact structure:
+{{
+  "report_type": "string or null — e.g. Complete Blood Count, Lipid Panel, Liver Function Test",
+  "report_date": "string or null — Date printed on the report, if visible",
+  "raw_text": "string or null — Full transcription of visible text from the document",
+  "parameters": [
+    {{
+      "parameter_name": "string — Exact test name as printed",
+      "observed_value": "string — Exact measured value as printed",
+      "unit": "string or null — Exact unit of measure as printed, or null",
+      "reference_range": "string or null — Exact reference interval printed by the lab, or null",
+      "reference_min": null,
+      "reference_max": null,
+      "laboratory_flag": "string or null — Any flag printed by the lab (e.g. HIGH, LOW, H, L, NORMAL, CRITICAL, or null)",
+      "extraction_confidence": 0.95,
+      "needs_user_review": false
+    }}
+  ],
+  "extraction_notes": "string or null — Any notes regarding document clarity or orientation"
+}}
+"""
+

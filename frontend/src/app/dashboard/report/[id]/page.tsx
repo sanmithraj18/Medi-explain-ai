@@ -44,6 +44,7 @@ export default function ReportDetailPage({ params }: PageProps) {
   const [editValue, setEditValue] = useState<string>('');
   const [editUnit, setEditUnit] = useState<string>('');
   const [confirming, setConfirming] = useState(false);
+  const [reExtracting, setReExtracting] = useState(false);
 
   const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
@@ -193,6 +194,59 @@ export default function ReportDetailPage({ params }: PageProps) {
     }
   };
 
+  const handleReExtract = async () => {
+    setReExtracting(true);
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(`${backendUrl}/api/v1/reports/${reportId}/re-extract`, {
+        method: 'POST',
+        headers,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Re-extraction failed' }));
+        throw new Error(err.detail || 'Could not re-extract document');
+      }
+
+      const data = await res.json();
+      if (data.parameters_found > 0) {
+        toast.success(`Successfully extracted ${data.parameters_found} laboratory parameter(s)!`);
+      } else {
+        toast.info('No laboratory parameters found. The image may not contain readable test results.');
+      }
+      await loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Re-extraction failed');
+    } finally {
+      setReExtracting(false);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'COMPLETED':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'EXTRACTED':
+        return 'bg-teal/10 text-teal-dark border-teal/20';
+      case 'NEEDS_REVIEW':
+        return 'bg-amber-100 text-amber-800 border-amber-200';
+      case 'ANALYZING':
+      case 'EXTRACTING':
+      case 'PROCESSING':
+        return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'FAILED':
+        return 'bg-red-100 text-red-800 border-red-200';
+      default:
+        return 'bg-slate-100 text-slate-700 border-slate-200';
+    }
+  };
+
   if (loading) {
     return (
       <div className="py-24 text-center text-sm text-blue-grey flex flex-col items-center justify-center gap-3">
@@ -266,7 +320,7 @@ export default function ReportDetailPage({ params }: PageProps) {
             <span className="text-xs text-blue-grey">
               Uploaded {formatDate(report?.created_at)}
             </span>
-            <span className="text-xs font-semibold text-teal bg-teal/5 px-2 py-0.5 rounded">
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${getStatusBadge(report?.processing_status)}`}>
               Status: {report?.processing_status}
             </span>
           </div>
@@ -279,21 +333,34 @@ export default function ReportDetailPage({ params }: PageProps) {
         </div>
 
         {!analysis && (
-          <button
-            onClick={handleTriggerAnalysis}
-            disabled={analyzing}
-            className="btn-primary text-xs !py-2.5 !px-5 self-start sm:self-auto shrink-0 shadow-md"
-          >
-            {analyzing ? (
-              <>
-                <RefreshCw size={14} className="animate-spin" /> Analyzing with AI...
-              </>
+          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            {parameters.length === 0 ? (
+              <button
+                onClick={handleReExtract}
+                disabled={reExtracting}
+                className="btn-primary text-xs !py-2.5 !px-5 shadow-md inline-flex items-center gap-2"
+              >
+                <RefreshCw size={14} className={reExtracting ? "animate-spin" : ""} />
+                {reExtracting ? "Extracting..." : "Re-extract with AI Vision"}
+              </button>
             ) : (
-              <>
-                <Sparkles size={14} /> Generate AI Explanation
-              </>
+              <button
+                onClick={handleTriggerAnalysis}
+                disabled={analyzing}
+                className="btn-primary text-xs !py-2.5 !px-5 shadow-md"
+              >
+                {analyzing ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" /> Analyzing with AI...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={14} /> Generate AI Explanation
+                  </>
+                )}
+              </button>
             )}
-          </button>
+          </div>
         )}
       </div>
 
@@ -371,8 +438,33 @@ export default function ReportDetailPage({ params }: PageProps) {
         </div>
 
         {parameters.length === 0 ? (
-          <div className="bg-white p-8 rounded-2xl border border-slate-100 shadow-card text-center text-xs text-blue-grey">
-            No extracted parameters found for this document.
+          <div className="bg-white p-8 rounded-2xl border border-amber-200 bg-amber-50/20 shadow-card text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 mx-auto flex items-center justify-center">
+              <AlertTriangle size={24} />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-bold text-navy text-sm">No Laboratory Parameters Detected</h3>
+              <p className="text-xs text-blue-grey max-w-md mx-auto">
+                No diagnostic test parameters could be detected from this document automatically. 
+                This can occur if the photo is blurry, taken at an angle, or if the document is not a clinical laboratory report.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                onClick={handleReExtract}
+                disabled={reExtracting}
+                className="btn-primary text-xs !py-2 !px-4 inline-flex items-center gap-2"
+              >
+                <RefreshCw size={14} className={reExtracting ? "animate-spin" : ""} />
+                {reExtracting ? "Re-extracting with AI Vision..." : "Re-extract with AI Vision"}
+              </button>
+              <Link
+                href="/dashboard/upload"
+                className="btn-outline text-xs !py-2 !px-4 inline-flex items-center gap-1.5"
+              >
+                Upload Clearer Document
+              </Link>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">

@@ -9,6 +9,51 @@ from PIL import Image, ImageOps, ImageFilter
 import pytesseract
 
 
+def prepare_image_for_vision(file_bytes: bytes, content_type: str = "image/jpeg") -> tuple[bytes, str]:
+    """
+    Prepare and optimize an uploaded document image for Gemini Vision:
+    1. EXIF orientation correction (phone camera / WhatsApp photos)
+    2. RGBA to RGB conversion
+    3. Dimensional scaling (max 2560px longest side, min 1000px shortest side)
+    4. Adaptive contrast enhancement
+    5. Clean JPEG encoding
+    Preserves original file_bytes in storage untouched.
+    """
+    try:
+        raw_image = Image.open(io.BytesIO(file_bytes))
+        # 1. Correct mobile camera orientation from EXIF
+        image = ImageOps.exif_transpose(raw_image)
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+
+        # 2. Dimensional normalization
+        w, h = image.size
+        max_dim = max(w, h)
+        min_dim = min(w, h)
+
+        # Scale down if giant (> 2560px)
+        if max_dim > 2560:
+            scale = 2560.0 / max_dim
+            new_size = (int(w * scale), int(h * scale))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+        # Scale up if tiny (< 800px)
+        elif min_dim < 800:
+            scale = 1000.0 / min_dim
+            new_size = (int(w * scale), int(h * scale))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+        # 3. Dynamic contrast normalization if faint
+        enhanced = ImageOps.autocontrast(image, cutoff=1)
+
+        buf = io.BytesIO()
+        enhanced.save(buf, format="JPEG", quality=92, optimize=True)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        # Fallback to original bytes and MIME type if processing encounters an issue
+        mime = content_type if content_type in ("image/jpeg", "image/png") else "image/jpeg"
+        return file_bytes, mime
+
+
 def extract_text_from_image(file_bytes: bytes, content_type: str = "image/jpeg") -> dict:
     """
     Extract text from an uploaded image file using Tesseract OCR with adaptive preprocessing.

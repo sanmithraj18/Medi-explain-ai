@@ -87,6 +87,23 @@ def extract_text_from_pdf(file_bytes: bytes) -> dict:
     }
 
 
+def render_pdf_to_images(file_bytes: bytes, max_pages: int = 3) -> list[bytes]:
+    """
+    Render PDF pages to high-resolution PNG image bytes for multimodal Gemini vision fallback.
+    """
+    images = []
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        for i in range(min(doc.page_count, max_pages)):
+            page = doc[i]
+            pix = page.get_pixmap(dpi=200, alpha=False)
+            images.append(pix.tobytes("png"))
+        doc.close()
+    except Exception:
+        pass
+    return images
+
+
 def _ocr_pdf_page(page: fitz.Page) -> Optional[str]:
     """
     Render a PDF page to an image and run Tesseract OCR on it.

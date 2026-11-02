@@ -20,8 +20,10 @@ from app.services.ai.prompts import (
     SYSTEM_PROMPT,
     OVERALL_SUMMARY_PROMPT,
     PARAMETER_EXPLANATION_PROMPT,
+    VISION_EXTRACTION_PROMPT,
 )
 from app.schemas.analysis import OverallSummarySchema, ParameterExplanationSchema
+from app.schemas.extraction import VisionExtractionResponse
 
 _model = None
 _active_model_name = None
@@ -105,9 +107,10 @@ def _get_model(model_name: str = None):
     return _model
 
 
-def _generate_content_with_resilience(prompt: str):
+def _generate_content_with_resilience(contents: Any):
     """
     Generate content with primary configured model and automatic fallback on 503/504/404/429 errors.
+    Supports text prompt strings or multimodal contents list ([prompt, image_part]).
     Guarded by request timeout to prevent hanging requests during upstream load spikes.
     """
     primary = settings.AI_MODEL or RECOMMENDED_MODEL
@@ -127,7 +130,7 @@ def _generate_content_with_resilience(prompt: str):
     for m_name in chain:
         try:
             model = _get_model(m_name)
-            return model.generate_content(prompt, request_options={"timeout": 15})
+            return model.generate_content(contents, request_options={"timeout": 20})
         except HTTPException:
             raise
         except Exception as e:
@@ -319,3 +322,116 @@ async def generate_parameter_explanation(parameter: Dict[str, Any]) -> Dict[str,
         )
     except Exception as e:
         _handle_gemini_exception(e)
+
+
+def _parse_ref_bounds(ref_text: str | None) -> tuple[float | None, float | None]:
+    """Extract numeric lower and upper bounds from a printed reference interval string."""
+    if not ref_text:
+        return None, None
+    clean = ref_text.strip()
+    # Check for range: e.g. 70 - 99 or 70.0 – 99.0
+    range_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*[-–—]\s*([0-9]+(?:\.[0-9]+)?)", clean)
+    if range_match:
+        try:
+            return float(range_match.group(1)), float(range_match.group(2))
+        except (ValueError, TypeError):
+            pass
+    # Check for upper threshold: e.g. < 200, <= 200, Upto 200, Less than 200
+    upper_match = re.search(r"(?:<|<=|≤|upto|up to|less than)\s*([0-9]+(?:\.[0-9]+)?)", clean, re.I)
+    if upper_match:
+        try:
+            return None, float(upper_match.group(1))
+        except (ValueError, TypeError):
+            pass
+    # Check for lower threshold: e.g. > 50, >= 50, Greater than 50
+    lower_match = re.search(r"(?:>|>=|≥|greater than)\s*([0-9]+(?:\.[0-9]+)?)", clean, re.I)
+    if lower_match:
+        try:
+            return float(lower_match.group(1)), None
+        except (ValueError, TypeError):
+            pass
+    return None, None
+
+
+def _detect_critical_flag(parameter_name: str, observed_value: str, current_flag: str | None) -> str | None:
+    """Detect potentially critical physiological values based on clinical thresholds."""
+    if current_flag and "critical" in current_flag.lower():
+        return "CRITICAL"
+    try:
+        num_match = re.search(r"[0-9]+(?:\.[0-9]+)?", observed_value)
+        if not num_match:
+            return current_flag
+        val = float(num_match.group(0))
+        from app.services.ocr.parameter_parser import CRITICAL_THRESHOLDS
+        for pattern, is_critical in CRITICAL_THRESHOLDS:
+            if pattern.search(parameter_name):
+                if is_critical(val):
+                    return "CRITICAL"
+    except Exception:
+        pass
+    return current_flag
+
+
+async def extract_parameters_with_vision(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    """
+    Extract laboratory parameters directly from medical report document image using Gemini Vision.
+    Enforces strict truth discovery and schema validation:
+    - Never invents parameters, observed values, units, or reference ranges.
+    - Accurately captures report title, date, and transcribed raw text.
+    - Flags ambiguous, blurry, or low-confidence values for user confirmation.
+    """
+    _get_model()
+    image_part = {"mime_type": mime_type, "data": image_bytes}
+    contents = [VISION_EXTRACTION_PROMPT, image_part]
+
+    try:
+        response = _generate_content_with_resilience(contents)
+        raw_result = _extract_json(response.text)
+        validated = VisionExtractionResponse.model_validate(raw_result)
+
+        params_out = []
+        for p in validated.parameters:
+            name = p.parameter_name.strip()
+            val = p.observed_value.strip()
+            unit = p.unit.strip() if p.unit else None
+            ref_text = p.reference_range.strip() if p.reference_range else None
+            ref_min = p.reference_min
+            ref_max = p.reference_max
+            if ref_text and (ref_min is None and ref_max is None):
+                ref_min, ref_max = _parse_ref_bounds(ref_text)
+
+            flag = _detect_critical_flag(name, val, p.laboratory_flag)
+            confidence = round(float(p.extraction_confidence), 3)
+            needs_review = p.needs_user_review or confidence < 0.70
+
+            params_out.append({
+                "parameter_name": name,
+                "observed_value": val,
+                "unit": unit,
+                "reference_min": ref_min,
+                "reference_max": ref_max,
+                "reference_text": ref_text,
+                "laboratory_flag": flag,
+                "extraction_confidence": confidence,
+                "needs_user_review": needs_review,
+                "user_confirmed": False,
+            })
+
+        return {
+            "report_type": validated.report_type,
+            "report_date": validated.report_date,
+            "raw_text": validated.raw_text or "",
+            "parameters": params_out,
+            "extraction_method": "gemini_vision",
+            "notes": validated.extraction_notes,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to parse Gemini vision extraction response: {e}",
+        )
+    except Exception as e:
+        _handle_gemini_exception(e)
+

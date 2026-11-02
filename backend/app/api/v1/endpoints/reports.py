@@ -24,6 +24,7 @@ from app.db.supabase_client import get_supabase
 from app.services.ocr.pdf_extractor import extract_text_from_pdf
 from app.services.ocr.image_extractor import extract_text_from_image
 from app.services.ocr.parameter_parser import parse_parameters
+from app.services.ocr.pipeline import process_document_extraction
 
 router = APIRouter()
 
@@ -204,43 +205,50 @@ async def upload_report(
 
     supabase.table("medical_reports").insert(report_record).execute()
 
-    # Run OCR extraction
+    # Run document extraction pipeline
     parameters = []
-    ocr_result = {}
+    extraction_result = {}
+    processing_status = "NEEDS_REVIEW"
     try:
-        if file_ext == "pdf":
-            ocr_result = extract_text_from_pdf(file_bytes)
-        else:
-            ocr_result = extract_text_from_image(file_bytes, content_type)
+        extraction_result = await process_document_extraction(
+            file_bytes=file_bytes,
+            file_ext=file_ext,
+            content_type=content_type,
+        )
+        parameters = extraction_result.get("parameters", [])
+        raw_text = extraction_result.get("raw_text", "")
+        processing_status = extraction_result.get("processing_status", "NEEDS_REVIEW")
 
-        raw_text = ocr_result.get("text", "")
-        parameters = parse_parameters(raw_text)
+        # Update report name if Gemini vision identified a specific panel
+        updated_report_name = clean_name
+        if extraction_result.get("report_type") and any(
+            g in clean_name.lower() for g in ["whatsapp", "camera_scan", "img_", "image", "photo", "report"]
+        ):
+            updated_report_name = f"{extraction_result['report_type']} ({clean_name})"
 
         # Update status and preserve original raw extracted text
-        processing_status = "NEEDS_REVIEW" if ocr_result.get("needs_review") else "EXTRACTED"
-        if not parameters:
-            processing_status = "NEEDS_REVIEW"
-
         supabase.table("medical_reports").update(
             {
+                "report_name": updated_report_name,
                 "processing_status": processing_status,
                 "raw_extracted_text": raw_text,
             }
         ).eq("id", report_id).execute()
 
-        # Store extracted parameters
+        # Clean existing parameters and store freshly extracted parameters
+        supabase.table("extracted_parameters").delete().eq("report_id", report_id).execute()
         if parameters:
             param_records = [
                 {
                     "report_id": report_id,
                     "parameter_name": p["parameter_name"],
-                    "observed_value": p["observed_value"],
+                    "observed_value": str(p["observed_value"]),
                     "unit": p.get("unit"),
                     "reference_min": p.get("reference_min"),
                     "reference_max": p.get("reference_max"),
                     "reference_text": p.get("reference_text"),
                     "laboratory_flag": p.get("laboratory_flag"),
-                    "extraction_confidence": p.get("extraction_confidence"),
+                    "extraction_confidence": p.get("extraction_confidence", 0.9),
                     "needs_user_review": p.get("needs_user_review", False),
                     "user_confirmed": False,
                 }
@@ -249,22 +257,22 @@ async def upload_report(
             supabase.table("extracted_parameters").insert(param_records).execute()
 
     except Exception as e:
+        processing_status = "FAILED"
         supabase.table("medical_reports").update(
             {"processing_status": "FAILED", "processing_error": str(e)[:500]}
         ).eq("id", report_id).execute()
 
     return {
         "report_id": report_id,
-        "report_name": clean_name,
-        "processing_status": processing_status if parameters else "NEEDS_REVIEW",
+        "report_name": updated_report_name if 'updated_report_name' in locals() else clean_name,
+        "processing_status": processing_status,
         "parameters_found": len(parameters),
-        "extraction_confidence": ocr_result.get("confidence"),
-        "needs_review": ocr_result.get("needs_review", False),
-        "message": (
-            "Report uploaded and processed successfully."
-            if parameters
-            else "Report uploaded but no parameters could be extracted automatically. "
-                 "The report may require manual review."
+        "extraction_confidence": extraction_result.get("confidence", 0.0),
+        "extraction_method": extraction_result.get("extraction_method", "ocr"),
+        "needs_review": extraction_result.get("needs_review", True),
+        "message": extraction_result.get(
+            "message",
+            "Report uploaded and processed successfully." if parameters else "No parameters could be extracted."
         ),
     }
 
@@ -396,6 +404,114 @@ async def confirm_parameter(
 
     supabase.table("extracted_parameters").update(updates).eq("id", param_id).eq("report_id", report_id).execute()
     return {"message": "Parameter confirmed successfully", "updates": updates}
+
+
+@router.post("/{report_id}/re-extract")
+@limiter.limit("10/minute")
+async def re_extract_report(
+    request: Request,
+    report_id: str,
+    current_user: dict = Depends(require_active_subscription),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    Re-extract laboratory parameters from an uploaded report using the complete AI Vision pipeline.
+    Downloads the original report from private Supabase Storage, re-analyzes, and atomically updates parameters.
+    """
+    # 1. Verify report ownership
+    report_res = (
+        supabase.table("medical_reports")
+        .select("*")
+        .eq("id", report_id)
+        .eq("user_id", current_user["id"])
+        .single()
+        .execute()
+    )
+    if not report_res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    report_data = report_res.data
+    file_path = report_data["file_path"]
+    file_ext = report_data.get("file_type") or "jpg"
+
+    # 2. Download original file bytes from Supabase storage
+    try:
+        file_bytes = supabase.storage.from_("medical-reports").download(file_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve original document from storage: {e}",
+        )
+
+    # 3. Mark as EXTRACTING
+    supabase.table("medical_reports").update(
+        {"processing_status": "EXTRACTING"}
+    ).eq("id", report_id).execute()
+
+    # 4. Re-run document extraction pipeline
+    content_type = "application/pdf" if file_ext == "pdf" else "image/jpeg"
+    try:
+        extraction_result = await process_document_extraction(
+            file_bytes=file_bytes,
+            file_ext=file_ext,
+            content_type=content_type,
+        )
+        parameters = extraction_result.get("parameters", [])
+        raw_text = extraction_result.get("raw_text", "")
+        processing_status = extraction_result.get("processing_status", "NEEDS_REVIEW")
+
+        # 5. Atomically replace extracted parameters
+        supabase.table("extracted_parameters").delete().eq("report_id", report_id).execute()
+        if parameters:
+            param_records = [
+                {
+                    "report_id": report_id,
+                    "parameter_name": p["parameter_name"],
+                    "observed_value": str(p["observed_value"]),
+                    "unit": p.get("unit"),
+                    "reference_min": p.get("reference_min"),
+                    "reference_max": p.get("reference_max"),
+                    "reference_text": p.get("reference_text"),
+                    "laboratory_flag": p.get("laboratory_flag"),
+                    "extraction_confidence": p.get("extraction_confidence", 0.9),
+                    "needs_user_review": p.get("needs_user_review", False),
+                    "user_confirmed": False,
+                }
+                for p in parameters
+            ]
+            supabase.table("extracted_parameters").insert(param_records).execute()
+
+        # 6. Update report record
+        updates: dict[str, Any] = {
+            "processing_status": processing_status,
+            "raw_extracted_text": raw_text,
+            "processing_error": None,
+        }
+        if extraction_result.get("report_type"):
+            updates["report_name"] = f"{extraction_result['report_type']} ({report_data.get('report_name', 'Report')})"
+
+        supabase.table("medical_reports").update(updates).eq("id", report_id).execute()
+
+        return {
+            "report_id": report_id,
+            "processing_status": processing_status,
+            "parameters_found": len(parameters),
+            "extraction_method": extraction_result.get("extraction_method"),
+            "confidence": extraction_result.get("confidence"),
+            "needs_review": extraction_result.get("needs_review"),
+            "message": extraction_result.get("message"),
+            "parameters": parameters,
+        }
+
+    except Exception as e:
+        supabase.table("medical_reports").update(
+            {"processing_status": "FAILED", "processing_error": str(e)[:500]}
+        ).eq("id", report_id).execute()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Re-extraction failed: {e}",
+        )
+
 
 
 @router.get("/{report_id}/raw-text")
