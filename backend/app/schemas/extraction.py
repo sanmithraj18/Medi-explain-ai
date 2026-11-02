@@ -24,3 +24,4 @@ class VisionExtractionResponse(BaseModel):
     raw_text: Optional[str] = Field(default=None, description="Summary transcription of visible document text")
     parameters: List[VisionParameterItem] = Field(default_factory=list, description="List of faithfully extracted laboratory parameters")
     extraction_notes: Optional[str] = Field(default=None, description="Observations regarding document legibility or quality")
+
