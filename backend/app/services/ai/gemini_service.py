@@ -24,6 +24,7 @@ from app.services.ai.prompts import (
 from app.schemas.analysis import OverallSummarySchema, ParameterExplanationSchema
 
 _model = None
+_active_model_name = None
 
 UNSAFE_DIAGNOSTIC_PATTERNS = [
     re.compile(
@@ -58,27 +59,107 @@ def sanitize_and_verify_medical_safety(text: str) -> str:
     return sanitized
 
 
-def _get_model():
+DEPRECATED_MODELS = {
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+}
+RECOMMENDED_MODEL = "gemini-3.5-flash"
+
+
+def _create_model(model_name: str):
+    """Instantiate a configured Gemini GenerativeModel instance."""
+    genai.configure(api_key=settings.AI_API_KEY)
+    return genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=SYSTEM_PROMPT,
+        generation_config=genai.GenerationConfig(
+            temperature=0.1,  # Low temperature for deterministic, factual adherence
+            top_p=0.8,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+        ),
+    )
+
+
+def _get_model(model_name: str = None):
     """Lazily initialize the Gemini model using configured settings."""
-    global _model
-    if _model is None:
-        if not settings.AI_API_KEY or settings.AI_API_KEY.strip() == "":
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="AI explanation service is not configured. Please configure AI_API_KEY in backend/.env.",
-            )
-        genai.configure(api_key=settings.AI_API_KEY)
-        _model = genai.GenerativeModel(
-            model_name=settings.AI_MODEL,
-            system_instruction=SYSTEM_PROMPT,
-            generation_config=genai.GenerationConfig(
-                temperature=0.1,  # Low temperature for deterministic, factual adherence
-                top_p=0.8,
-                max_output_tokens=4096,
-                response_mime_type="application/json",
-            ),
+    global _model, _active_model_name
+    if not settings.AI_API_KEY or settings.AI_API_KEY.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI explanation service is not configured. Please configure AI_API_KEY in backend/.env.",
         )
+
+    target = model_name or settings.AI_MODEL or RECOMMENDED_MODEL
+    # Auto-upgrade deprecated or retired models to the currently active flash model
+    if target in DEPRECATED_MODELS:
+        target = RECOMMENDED_MODEL
+
+    if _model is None or _active_model_name != target:
+        _model = _create_model(target)
+        _active_model_name = target
     return _model
+
+
+def _handle_gemini_exception(e: Exception, model_name: str = None):
+    """
+    Distinctly categorize and raise appropriate HTTP exceptions for Gemini API failures:
+    - 404: Model not found / deprecated
+    - 503: Invalid/missing API key or service unavailable
+    - 429: Rate limit / quota exceeded
+    - 504: Request timeout
+    """
+    if isinstance(e, HTTPException):
+        raise e
+
+    err_msg = str(e)
+    err_lower = err_msg.lower()
+    used_model = model_name or settings.AI_MODEL or "configured model"
+
+    # 1. Model Not Found / Unsupported (404)
+    if "404" in err_msg or "not found" in err_lower or "no longer available" in err_lower or "not supported" in err_lower:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Gemini model '{used_model}' is not found or no longer supported. Please update AI_MODEL.",
+        )
+
+    # 2. Invalid Key / Authentication Error (400, 401, 403, API_KEY_INVALID)
+    if "api_key_invalid" in err_lower or "api key not valid" in err_lower or "unauthorized" in err_lower or "permission_denied" in err_lower:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Gemini API key is invalid or unauthorized. Please verify AI_API_KEY.",
+        )
+
+    # 3. Rate Limit / Quota Exceeded (429, RESOURCE_EXHAUSTED)
+    if "quota" in err_lower or "429" in err_msg or "resource_exhausted" in err_lower:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Gemini AI rate limit reached. Please retry in a few moments.",
+        )
+
+    # 4. Timeout / Gateway Timeout (504, DEADLINE_EXCEEDED)
+    if "timeout" in err_lower or "deadline_exceeded" in err_lower or "timed out" in err_lower:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="AI explanation service timed out. Please try again.",
+        )
+
+    # 5. Service Overloaded / Unavailable (503)
+    if "503" in err_msg or "unavailable" in err_lower or "high demand" in err_lower:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Gemini service is temporarily experiencing high demand. Please retry shortly.",
+        )
+
+    # Generic AI Service Error
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"AI service error: {err_msg[:120]}",
+    )
 
 
 def _extract_json(text: str) -> dict:
@@ -156,21 +237,7 @@ async def generate_overall_summary(parameters: List[Dict[str, Any]]) -> Dict[str
             detail=f"AI summary response parsing failed: {e}",
         )
     except Exception as e:
-        err_msg = str(e)
-        if "quota" in err_msg.lower() or "429" in err_msg:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Gemini AI rate limit reached. Please retry in a few moments.",
-            )
-        if "timeout" in err_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="AI explanation service timed out. Please try again.",
-            )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"AI service error: {err_msg[:120]}",
-        )
+        _handle_gemini_exception(e)
 
 
 async def generate_parameter_explanation(parameter: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,18 +281,4 @@ async def generate_parameter_explanation(parameter: Dict[str, Any]) -> Dict[str,
             detail=f"AI parameter response parsing failed: {e}",
         )
     except Exception as e:
-        err_msg = str(e)
-        if "quota" in err_msg.lower() or "429" in err_msg:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Gemini AI rate limit reached. Please retry in a few moments.",
-            )
-        if "timeout" in err_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="AI explanation service timed out. Please try again.",
-            )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"AI service error: {err_msg[:120]}",
-        )
+        _handle_gemini_exception(e)
