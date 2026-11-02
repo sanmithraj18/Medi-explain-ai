@@ -419,7 +419,7 @@ export default function ReportDetailPage({ params }: PageProps) {
 
               <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200 space-y-2">
                 <div className="flex items-center gap-2 text-slate-700 font-bold text-xs">
-                  <HelpCircle size={16} className="text-slate-500" /> Reference Range Unavailable ({overall.parameters_unclassified?.length || 0})
+                  <HelpCircle size={16} className="text-slate-500" /> Reference Range Unavailable / Incomplete ({overall.parameters_unclassified?.length || 0})
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {overall.parameters_unclassified?.map((p: string) => (
@@ -518,6 +518,8 @@ export default function ReportDetailPage({ params }: PageProps) {
               }
 
               const isCritical = classification === 'CRITICAL' || param.laboratory_flag === 'CRITICAL' || overall?.potentially_critical_flags?.includes(param.parameter_name);
+              const isIncomplete = classification === 'INCOMPLETE_ASSESSMENT';
+              const isPediatric = classification === 'PEDIATRIC_INTERPRETATION_REQUIRED';
               const isHigh = classification === 'ABOVE_RANGE';
               const isLow = classification === 'BELOW_RANGE';
               const isWithin = classification === 'WITHIN_RANGE';
@@ -626,6 +628,10 @@ export default function ReportDetailPage({ params }: PageProps) {
                               Reference:{' '}
                               {param.reference_text
                                 ? param.reference_text
+                                : isIncomplete
+                                ? 'Incomplete (Diastolic Measurement Required)'
+                                : isPediatric
+                                ? 'Pediatric Reference Required (AAP Guidelines)'
                                 : exp?.is_contextual_threshold && exp?.clinical_source
                                 ? `Clinical Benchmark (${exp.clinical_source})`
                                 : 'Not Reported by Laboratory'}
@@ -653,6 +659,10 @@ export default function ReportDetailPage({ params }: PageProps) {
                         className={`text-xs font-bold px-3 py-1 rounded-full ${
                           isCritical
                             ? 'bg-red-100 text-red-700 border border-red-200'
+                            : isIncomplete
+                            ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                            : isPediatric
+                            ? 'bg-purple-100 text-purple-800 border border-purple-200'
                             : isHigh
                             ? 'bg-amber-100 text-amber-800 border border-amber-200'
                             : isLow
@@ -664,6 +674,10 @@ export default function ReportDetailPage({ params }: PageProps) {
                       >
                         {isCritical
                           ? 'Critical Flag'
+                          : isIncomplete
+                          ? 'Incomplete Blood Pressure Assessment'
+                          : isPediatric
+                          ? 'Pediatric Reference Required'
                           : isHigh
                           ? 'Above Range'
                           : isLow

@@ -58,10 +58,12 @@ OVERALL_SUMMARY_PROMPT = """Analyze the following laboratory test parameters ext
 CLASSIFICATION & SAFETY RULES:
 1. "parameters_within_range": ONLY include parameters that have a documented reference interval and fall strictly within it. NEVER place parameters with missing reference ranges here.
 2. "parameters_outside_range": Include parameters that fall below or above reference range, OR outside recognized clinical benchmarks (e.g. Left Ventricular Ejection Fraction of 40% is below the typical >=50% ACC/AHA benchmark and MUST be counted in parameters_outside_range).
-3. "parameters_unclassified": Include parameters where no laboratory reference range was reported and no recognized contextual clinical benchmark applies.
+3. "parameters_unclassified": Include parameters where no laboratory reference range was reported, parameters with incomplete blood pressure assessments (missing diastolic), and pediatric readings requiring age-specific percentiles.
 4. "potentially_critical_flags": Include all parameters with critical flags or urgent abnormal values warranting prompt clinical evaluation.
 5. NEVER diagnose heart failure or any cardiac disease based on ejection fraction alone.
-6. NEVER diagnose hypertension or stage blood pressure based on systolic blood pressure alone.
+6. NEVER diagnose hypertension or stage blood pressure based on an isolated blood pressure reading.
+7. If diastolic pressure is missing, do NOT assign a complete blood pressure category. Place isolated systolic readings into parameters_unclassified.
+8. NEVER apply adult blood pressure thresholds (<120/<80) to pediatric patients under 18 years.
 
 Extracted parameters:
 {parameters_json}
@@ -82,7 +84,7 @@ Return this exact JSON structure:
   "observed_value": "{observed_value}",
   "unit": "{unit}",
   "reference_range": "{reference_text}",
-  "classification": "one of: WITHIN_RANGE, BELOW_RANGE, ABOVE_RANGE, CRITICAL, RANGE_UNAVAILABLE, NOT_CLASSIFIED, UNKNOWN",
+  "classification": "one of: WITHIN_RANGE, BELOW_RANGE, ABOVE_RANGE, CRITICAL, INCOMPLETE_ASSESSMENT, PEDIATRIC_INTERPRETATION_REQUIRED, RANGE_UNAVAILABLE, NOT_CLASSIFIED, UNKNOWN",
   "what_it_measures": "string — plain-language explanation of what this test measures (1-2 sentences)",
   "simple_explanation": "string — what this specific result means in plain language, without diagnosing",
   "contextual_limitations": "string — important limitations (e.g., single test, lab variation, lifestyle factors)",
@@ -100,10 +102,11 @@ CRITICAL CLINICAL BENCHMARKS & SAFETY MANDATES:
    - Clinical Benchmark: Normal LVEF is typically >= 50% (ACC/AHA Guidelines for the Management of Heart Failure).
    - An ejection fraction below 50% (such as 40%) is BELOW_RANGE and reflects reduced left ventricular systolic function.
    - MANDATORY SAFETY RULE: NEVER diagnose heart failure based on ejection fraction alone. Heart failure is a clinical syndrome requiring symptoms, physical signs, and physician diagnosis.
-2. Systolic Blood Pressure:
-   - Clinical Benchmark: Normal systolic blood pressure is < 120 mmHg (2017 ACC/AHA High Blood Pressure Clinical Practice Guideline).
-   - A systolic reading >= 120 mmHg is ABOVE_RANGE.
-   - MANDATORY SAFETY RULE: NEVER classify systolic blood pressure independently as a complete blood-pressure assessment or stage. Note that complete staging requires concurrent diastolic blood pressure and repeated clinical measurements.
+2. Blood Pressure Assessment & Safety:
+   - Complete Evaluation Requirement: A complete blood pressure assessment requires BOTH systolic and diastolic measurements. If diastolic pressure is missing, classify as INCOMPLETE_ASSESSMENT and display 'Incomplete Blood Pressure Assessment'.
+   - Isolated Reading Distinction: Clearly distinguish an isolated systolic value above the optimal threshold (< 120 mmHg, e.g. 128 mmHg) from a confirmed diagnosis of hypertension.
+   - MANDATORY SAFETY RULE: NEVER diagnose hypertension from an isolated reading. Staging requires concurrent systolic and diastolic readings and repeated clinical measurements on separate occasions.
+   - Age-Specific Interpretation: Do NOT apply adult ACC/AHA thresholds to patients under 18. Pediatric interpretation requires age-, sex-, and height-specific percentiles per AAP guidelines (classify as PEDIATRIC_INTERPRETATION_REQUIRED).
 3. Missing Laboratory Reference Ranges:
    - If the laboratory did not report a reference range and no recognized clinical benchmark applies, classification MUST be RANGE_UNAVAILABLE. NEVER return WITHIN_RANGE when the reference range is missing.
 4. ABSOLUTE PROHIBITION: Do NOT diagnose any condition or prescribe any medication. An out-of-range value does not confirm disease.

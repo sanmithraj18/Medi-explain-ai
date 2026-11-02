@@ -42,6 +42,14 @@ UNSAFE_DIAGNOSTIC_PATTERNS = [
         re.I,
     ),
     re.compile(
+        r"\b(you have|diagnosed with|diagnosis of|diagnosis is|diagnose|you suffer from|this indicates you have|this confirms(?: you have)?)\s+(?:stage\s+[12]\s+)?(?:hypertension|high blood pressure|essential hypertension)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(confirms|diagnostic of|diagnoses|indicates|diagnostic for|meets the criteria for)\s+(?:stage\s+[12]\s+)?(?:hypertension|high blood pressure)\b",
+        re.I,
+    ),
+    re.compile(
         r"\b(take|prescribe|prescribed|dosage of|start taking|stop taking|increase dose|decrease dose)\s+[0-9]*\s*(mg|tablets|capsules|pills|medication|insulin|metformin|aspirin)?\b",
         re.I,
     ),
@@ -56,7 +64,9 @@ def sanitize_and_verify_medical_safety(text: str) -> str:
     """
     Defense-in-depth safety guardrail:
     Scans AI text for diagnostic or prescriptive statements and neutralizes them.
-    Guarantees heart failure is not diagnosed based on ejection fraction alone.
+    Guarantees:
+    - Heart failure is not diagnosed based on ejection fraction alone.
+    - Hypertension is not diagnosed based on an isolated blood pressure reading.
     """
     if not text:
         return ""
@@ -67,6 +77,11 @@ def sanitize_and_verify_medical_safety(text: str) -> str:
             if re.search(r"\b(?:heart failure|chf)\b", sanitized, re.I):
                 sanitized = pattern.sub(
                     "reduced systolic function warrants clinical evaluation by a physician, but does not alone diagnose heart failure",
+                    sanitized,
+                )
+            elif re.search(r"\b(?:hypertension|high blood pressure)\b", sanitized, re.I):
+                sanitized = pattern.sub(
+                    "an isolated blood pressure reading cannot diagnose hypertension and warrants clinical evaluation with repeated measurements by a physician",
                     sanitized,
                 )
             else:

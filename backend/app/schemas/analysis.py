@@ -28,7 +28,7 @@ class ParameterExplanationSchema(BaseModel):
     reference_range: Optional[str] = None
     classification: str = Field(
         default="UNKNOWN",
-        description="Classification: WITHIN_RANGE, BELOW_RANGE, ABOVE_RANGE, CRITICAL, RANGE_UNAVAILABLE, NOT_CLASSIFIED, UNKNOWN"
+        description="Classification: WITHIN_RANGE, BELOW_RANGE, ABOVE_RANGE, CRITICAL, INCOMPLETE_ASSESSMENT, PEDIATRIC_INTERPRETATION_REQUIRED, RANGE_UNAVAILABLE, NOT_CLASSIFIED, UNKNOWN"
     )
     what_it_measures: str = Field(description="Educational explanation of biological role")
     simple_explanation: str = Field(description="Plain-language educational explanation without diagnosing")
