@@ -22,7 +22,7 @@ export default function BillingManagementPage() {
   const [cancelling, setCancelling] = useState(false);
   const [showConsentModal, setShowConsentModal] = useState(false);
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
+  const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
   const fetchBillingData = useCallback(async () => {
     try {

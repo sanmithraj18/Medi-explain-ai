@@ -37,7 +37,7 @@ export default function ReportDetailPage({ params }: PageProps) {
   const [editUnit, setEditUnit] = useState<string>('');
   const [confirming, setConfirming] = useState(false);
 
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
+  const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
   const loadData = useCallback(async () => {
     try {

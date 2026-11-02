@@ -19,11 +19,20 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 20
 
     # CORS
-    ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    ALLOWED_ORIGIN_REGEX: str = r"^https:\/\/.*\.vercel\.app$"
 
     @property
     def ALLOWED_ORIGINS_LIST(self) -> List[str]:
-        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
+        raw = self.ALLOWED_ORIGINS or ""
+        origins = []
+        for o in raw.split(","):
+            clean = o.strip().strip("'\"").rstrip("/")
+            if clean:
+                origins.append(clean)
+        if not origins:
+            origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+        return origins
 
     @property
     def TZ(self):

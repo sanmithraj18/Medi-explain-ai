@@ -204,7 +204,13 @@ export default function UploadReportPage() {
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
 
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000';
+      if (!session?.access_token) {
+        setErrorMsg('Authentication session not found. Please log in again.');
+        toast.error('Session expired. Please log in.');
+        return;
+      }
+
+      const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
       const formData = new FormData();
       formData.append('file', file);
       formData.append('report_name', reportName.trim() || file.name);
@@ -212,10 +218,9 @@ export default function UploadReportPage() {
       setProgress(45);
       setStatusStep('Step 2 of 3: Encrypting and saving to private medical storage...');
 
-      const headers: Record<string, string> = {};
-      if (session?.access_token) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      }
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${session.access_token}`,
+      };
 
       const res = await fetch(`${backendUrl}/api/v1/reports/upload`, {
         method: 'POST',
@@ -244,8 +249,12 @@ export default function UploadReportPage() {
         return;
       }
       console.error('Upload error:', err);
-      setErrorMsg(err.message || 'An error occurred during file upload. Please verify your connection.');
-      toast.error(err.message || 'Upload failed');
+      const isNetworkError = err.message === 'Failed to fetch' || err instanceof TypeError;
+      const displayError = isNetworkError
+        ? 'Connection failed: Unable to communicate with the backend server (Failed to fetch). Please check backend CORS settings or verify the service is active.'
+        : (err.message || 'An error occurred during file upload. Please verify your connection.');
+      setErrorMsg(displayError);
+      toast.error(displayError);
     } finally {
       abortControllerRef.current = null;
       setUploading(false);
