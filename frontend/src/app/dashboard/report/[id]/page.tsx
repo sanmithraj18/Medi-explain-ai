@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, use, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import { 
   Activity, ArrowLeft, Brain, Sparkles, CheckCircle2, 
   AlertTriangle, Copy, Check, MessageSquare,
@@ -12,12 +13,19 @@ import { formatDate } from '@/lib/utils';
 import { toast } from 'sonner';
 
 interface PageProps {
-  params: Promise<{ id: string }>;
+  params?: { id?: string };
 }
 
 export default function ReportDetailPage({ params }: PageProps) {
-  const resolvedParams = use(params);
-  const reportId = resolvedParams.id;
+  const routeParams = useParams();
+  const reportId = (
+    params?.id ||
+    (typeof routeParams?.id === 'string'
+      ? routeParams.id
+      : Array.isArray(routeParams?.id)
+      ? routeParams.id[0]
+      : '')
+  ) as string;
 
   const [report, setReport] = useState<any>(null);
   const [parameters, setParameters] = useState<any[]>([]);
@@ -40,6 +48,7 @@ export default function ReportDetailPage({ params }: PageProps) {
   const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
   const loadData = useCallback(async () => {
+    if (!reportId) return;
     try {
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
@@ -211,8 +220,13 @@ export default function ReportDetailPage({ params }: PageProps) {
     );
   }
 
-  const overall = analysis?.overall_summary;
-  const detailed = analysis?.detailed_explanation || {};
+  const overall = typeof analysis?.overall_summary === 'string'
+    ? (() => { try { return JSON.parse(analysis.overall_summary); } catch { return null; } })()
+    : analysis?.overall_summary;
+
+  const detailed = typeof analysis?.detailed_explanation === 'string'
+    ? (() => { try { return JSON.parse(analysis.detailed_explanation); } catch { return {}; } })()
+    : (analysis?.detailed_explanation || {});
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
